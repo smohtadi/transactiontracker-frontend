@@ -1,45 +1,58 @@
-import { useState } from "react";
+import { FormEvent, useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Alert, Typography } from "antd";
-import TransactionForm from "../../components/TransactionForm/TransactionForm";
+import { Alert, Card, Loading, Text } from "../../components";
+import { TransactionForm } from "../../partials";
 import { ITransactionFormValues } from "../../types";
-import Loading from "../../components/Loading/Loading";
 import { create as createTransaction } from "../../services/transactionService";
 import { getErrorMessage } from "../../utils/langUtils";
-const { Title, Paragraph } = Typography;
 
 function NewTransaction() {
   const navigate = useNavigate();
-  const [formValues] = useState<ITransactionFormValues>({
+  const [formValues, setFormValues] = useState<ITransactionFormValues>({
     amount: "",
-    category: 0,
-    currency: 0,
+    category: "",
+    currency: "",
     date: "",
     description: "",
-    type: 0,
+    type: "",
   });
   const [error, setError] = useState<string>("");
-  const handleSubmit = () => {
-    createTransaction(formValues)
-      .then(() => {
-        navigate(-1);
-      })
-      .catch((error) => setError(getErrorMessage(error)));
+  const handleChange = (name: string, value: string) => {
+    setFormValues({ ...formValues, [name]: value });
   };
+  const handleSubmit = useCallback(
+    (e: FormEvent) => {
+      e.preventDefault();
+      createTransaction(formValues)
+        .then(() => {
+          navigate(-1);
+        })
+        .catch((error) => setError(getErrorMessage(error)));
+    },
+    [formValues, navigate]
+  );
   return (
-    <main>
-      <Title>Create a Transaction</Title>
-      <Paragraph>
-        Create a new transaction by filling out the form and pressing the save
-        button.
-      </Paragraph>
-      {error.length > 0 && <Alert message={error} type="error" />}
-      {formValues ? (
-        <TransactionForm onSubmit={handleSubmit} values={formValues} />
-      ) : (
-        <Loading />
-      )}
-    </main>
+    <Card>
+      <Card.Header>
+        <Text.H1>Create a Transaction</Text.H1>
+        <Text.P style={{ marginBlockStart: "1rem", marginBlockEnd: "2rem" }}>
+          Create a new transaction by filling out the form and pressing the
+          submit button.
+        </Text.P>
+      </Card.Header>
+      <Card.Body>
+        {error.length > 0 && <Alert>{error}</Alert>}
+        {formValues ? (
+          <TransactionForm
+            onChange={handleChange}
+            onSubmit={handleSubmit}
+            values={formValues}
+          />
+        ) : (
+          <Loading />
+        )}
+      </Card.Body>
+    </Card>
   );
 }
 

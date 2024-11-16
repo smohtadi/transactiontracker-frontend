@@ -1,4 +1,14 @@
-type TTransactionTypeSlug = 'expense' | 'income';
+import { CurrencyAbbr, TransactionType } from "./constants";
+
+type TTransactionType = TransactionType.EXPENSE | TransactionType.INCOME;
+export type TCurrencyAbbr =
+  | CurrencyAbbr.CAD
+  | CurrencyAbbr.EUR
+  | CurrencyAbbr.GBP
+  | CurrencyAbbr.USD;
+export type TCurrencyAmount = {
+  [key in TCurrencyAbbr]: string;
+};
 export interface ICategory {
   id: string;
   name: string;
@@ -9,7 +19,7 @@ export interface IChoice {
   value: string | number;
 }
 export interface ICurrency {
-  abbr: string;
+  abbr: TCurrencyAbbr;
   id: string;
   name: string;
 }
@@ -30,8 +40,27 @@ export interface ITransactionFormValues {
   description: string;
   type: string;
 }
+export interface ITransactionQuery {
+  from: string;
+  to: string;
+  types: string;
+}
 export interface ITransactionType {
   id: string;
   name: string;
-  slug: TTransactionTypeSlug;
+  slug: TTransactionType;
+}
+export interface IAuthToken {
+  idToken: string;
+  refreshToken: string;
+}
+
+export interface ICuser {
+  id: string;
+  name: string;
+}
+export interface IAuthContext {
+  user: ICuser | null;
+  login: (username: string, password: string) => Promise<void>;
+  logout: () => void;
 }

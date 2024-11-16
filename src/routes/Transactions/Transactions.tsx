@@ -1,23 +1,29 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import {
+  Alert,
+  Anchor,
   Button,
   Card,
-  Dropdown,
   Form,
-  Row,
-  Select,
   Table,
-  Typography,
-} from "antd";
-import type { TableColumnsType, TableProps, MenuProps } from "antd";
-import { getAll as getTransactions, deleteAll as deleteTransactions } from "../../services/transactionService";
-import { groupBy, sumDecimals } from "../../utils/langUtils";
-import { type ITransaction } from "../../types";
-const { Paragraph, Title } = Typography;
+  Text,
+} from "../../components";
+import {
+  getAll as getTransactions,
+  remove as deleteTransaction,
+} from "../../services/transactionService";
+import {
+  getErrorMessage,
+  groupBy,
+  isBetween,
+  isStrInt,
+  isValidMonth,
+  sumDecimals,
+} from "../../utils/langUtils";
+import { TCurrencyAbbr, TCurrencyAmount } from "../../types";
+import { TransactionType } from "../../constants";
 
-type TableRowSelection<T extends object = object> =
-  TableProps<T>["rowSelection"];
 const monthNames = [
   "January",
   "February",
@@ -32,18 +38,22 @@ const monthNames = [
   "November",
   "December",
 ];
-
-const actionItems = [
-  {
-    key: "edit",
-    label: "Edit",
-  },
-  {
-    key: "delete",
-    label: "Delete",
-  },
-];
-
+const isValidDate = (year: unknown, month: unknown) => {
+  if (
+    (!isStrInt(year) && !Number.isInteger(year)) ||
+    (!isStrInt(month) && !Number.isInteger(month))
+  )
+    return false;
+  const monthNum = +(month as string);
+  const yearNum = +(year as string);
+  const d = new Date();
+  if (
+    !isValidMonth(monthNum) ||
+    !isBetween(yearNum, d.getFullYear() - 5, d.getFullYear())
+  )
+    return false;
+  return true;
+};
 interface ITableRow {
   key: string;
   date: string;
@@ -51,40 +61,19 @@ interface ITableRow {
   amount: string;
   category: string;
   type: string;
-  currency: string;
+  currency: TCurrencyAbbr;
 }
-
-const columns: TableColumnsType<ITableRow> = [
-  { title: "Date", dataIndex: "date" },
-  { title: "Description", dataIndex: "description" },
-  { title: "Amount", dataIndex: "amount" },
-  { title: "Type", dataIndex: "type" },
-  { title: "Category", dataIndex: "category" },
-  { title: "Currency", dataIndex: "currency" },
-];
-
-interface ISummary {
-  [key: string]: { [k: string]: string };
-}
-
-const titleToSlugMap = {
-  Expenses: "expense",
-  Income: "income",
-  Balance: "balance",
-};
-const typeTitles = Object.keys(titleToSlugMap);
-
 export default function Expenses() {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
-  const [summary, setSummary] = useState<ISummary>();
-  const [tableRows, setTableRows] = useState<ITableRow[]>([]);
+  const [currencies, setCurrencies] = useState<TCurrencyAbbr[]>([]);
+  const [error, setError] = useState<string>("");
   const [month, setMonth] = useState<number>(0);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [tableRows, setTableRows] = useState<ITableRow[]>([]);
+  const [totalExpense, setTotalExpense] = useState<TCurrencyAmount>();
+  const [totalIncome, setTotalIncome] = useState<TCurrencyAmount>();
+  const [totalBalance, setTotalBalance] = useState<TCurrencyAmount>();
   const [year, setYear] = useState<number>(0);
   const [yearChoices, setYearChoices] = useState<number[]>([]);
-  // const [loading, setLoading] = useState(false);
-  const navigate = useNavigate();
-
   useEffect(() => {
     const currYear = new Date().getFullYear();
     const years = new Array(6);
@@ -93,181 +82,252 @@ export default function Expenses() {
     }
     setYearChoices(years);
   }, []);
-
-  const fetchData = useCallback(() => {
-    if (!Number.isInteger(month) || !Number.isInteger(year)) return;
-    const toDate = new Date(year, month + 1, 0); // last day of month
-    const toDateISO = `${toDate.getFullYear()}-${
-      toDate.getMonth() + 1
-    }-${toDate.getDate()}`;
-    const query = { from: `${year}-${month + 1}-01`, to: toDateISO };
-    getTransactions(query).then((data) => {
-      const trows: ITableRow[] = data.map((t) => {
-        if (!t?.category?.name || !t?.currency?.abbr || !t?.type?.name)
-          throw new Error("Invalid transaction.");
-        return {
-          amount: t.amount + "",
-          category: t.category.name,
-          currency: t.currency.abbr,
-          date: t.date,
-          description: t.description,
-          key: t.id,
-          type: t.type.name,
-        };
-      });
-
-      const typeGroups = groupBy(data, (t) => t?.type?.slug);
-      const typeAbbrGroups: {
-        [key: string]: { [key: string]: ITransaction[] };
-      } = {};
-      for (const type in typeGroups) {
-        typeAbbrGroups[type] = groupBy<ITransaction>(
-          typeGroups[type],
-          (t) => t?.currency?.abbr
-        );
-      }
-      const smap: ISummary = { balance: {} };
-      for (const type in typeAbbrGroups) {
-        for (const abbr in typeAbbrGroups[type]) {
-          const amounts = typeAbbrGroups[type][abbr].map((t) => t.amount);
-          const total = sumDecimals(amounts, 2);
-          smap["balance"][abbr] = smap["balance"][abbr] || "0";
-          smap["balance"][abbr] = sumDecimals([
-            smap["balance"][abbr],
-            type === "expense" ? "-" + total : total,
-          ]);
-          if (!(type in smap)) smap[type] = {};
-          smap[type][abbr] = total;
-        }
-      }
-      setSummary(smap);
-      setTableRows(trows);
-    });
-  },[month, year]);
+  const fetchData = useCallback((y: number, m: number) => {
+    if (!isValidDate(y, m)) return;
+    const toDate = new Date(y, m + 1, 0); // last day of month
+    let toDateISO = `${toDate.getFullYear()}-`;
+    toDateISO += toDate.getMonth() + 1 < 10 ? `0${toDate.getMonth() + 1}-` : `${toDate.getMonth() + 1}-`;
+    toDateISO += `${toDate.getDate()} 23:59:59`;
+    let fromDateISO = `${y}-`;
+    fromDateISO += m + 1 < 10 ? `0${m + 1}-` : `${m + 1}-`;
+    fromDateISO += "01 00:00:00";
+    const query = {
+      from: fromDateISO,
+      to: toDateISO,
+      types: `${TransactionType.EXPENSE},${TransactionType.INCOME}`,
+      size: 20,
+      page: 1,
+      sort: "date-asc",
+    };
+    getTransactions(query)
+      .then((data) => {
+        const trows: ITableRow[] = data.map((t) => {
+          if (!t?.category?.name || !t?.currency?.abbr || !t?.type?.name)
+            throw new Error("Invalid transaction.");
+          return {
+            amount: t.amount + "",
+            category: t.category.name,
+            currency: t.currency.abbr,
+            date: t.date,
+            description: t.description,
+            key: t.id,
+            type: t.type.name,
+          };
+        });
+        setTableRows(trows);
+        setError("");
+      })
+      .catch((err) => setError(getErrorMessage(err)));
+  }, []);
 
   useEffect(() => {
-    const qmonth = searchParams.get("month");
-    const qyear = searchParams.get("year");
-    const currDate = new Date();
-    currDate.getFullYear();
-    if (
-      typeof qmonth !== "string" ||
-      typeof qyear !== "string" ||
-      !Number.isInteger(+qmonth) ||
-      !Number.isInteger(+qyear)
-    )
-      throw new Error("Page not found");
-    const imonth = +qmonth,
-      iyear = +qyear;
-    if (
-      imonth < 0 ||
-      imonth > 11 ||
-      iyear < currDate.getFullYear() - 5 ||
-      iyear > currDate.getFullYear()
-    )
-      throw new Error("Page not found");
-    setMonth(imonth);
-    setYear(iyear);
-    fetchData();
-  }, [searchParams, fetchData]);
-
-  const handleDateSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    setSearchParams({ month: month.toString(), year: year.toString() });
-  };
-
-  const onSelectChange = (newSelectedRowKeys: string[]) => {
-    setSelectedRowKeys(newSelectedRowKeys);
-  };
-
-  const onActionMenuClick: MenuProps["onClick"] = (e) => {
-    if (selectedRowKeys.length === 0) return;
-    if (e.key === "delete") {
-      deleteTransactions(selectedRowKeys);
-    } else if (e.key === "edit") {
-      navigate(`/transaction/${selectedRowKeys[0]}`);
+    if (tableRows.length === 0) return;
+    const expenses = groupBy<ITableRow, TCurrencyAbbr>(
+      tableRows.filter((t) => t.type === "Expense"),
+      (t) => t.currency
+    );
+    const income = groupBy<ITableRow, TCurrencyAbbr>(
+      tableRows.filter((t) => t.type === "Income"),
+      (t) => t.currency
+    );
+    const expenseSum = {} as TCurrencyAmount;
+    const incomeSum = {} as TCurrencyAmount;
+    const balanceSum = {} as TCurrencyAmount;
+    const currencySet = new Set<TCurrencyAbbr>();
+    let currency: TCurrencyAbbr;
+    for (currency in expenses) {
+      expenseSum[currency] = sumDecimals(
+        expenses[currency].map((t) => t.amount)
+      );
+      currencySet.add(currency);
     }
-  };
+    for (currency in income) {
+      incomeSum[currency] = sumDecimals(income[currency].map((t) => t.amount));
+      currencySet.add(currency);
+    }
+    for (currency of currencySet) {
+      balanceSum[currency] = sumDecimals([
+        incomeSum[currency] || "0",
+        expenseSum[currency] ? "-" + expenseSum[currency] : "0",
+      ]);
+    }
+    setCurrencies([...currencySet]);
+    setError("");
+    setTotalBalance(balanceSum);
+    setTotalExpense(expenseSum);
+    setTotalIncome(incomeSum);
 
-  const rowSelection: TableRowSelection<ITableRow> = {
-    selectedRowKeys,
-    onChange: onSelectChange,
-  };
+    // labels = expense_categories_names[]
+    // [{ usd: { labels: string[], data: number }}]
+  }, [tableRows]);
 
+  useEffect(() => {
+    const qmonth = searchParams.get("month") || new Date().getMonth();
+    const qyear = searchParams.get("year") || new Date().getFullYear();
+    if (!isValidDate(qyear, qmonth)) {
+      setError("Invalid date");
+      return;
+    }
+    if (qmonth === null || qyear === null) return;
+    const m = +qmonth,
+      y = +qyear;
+    setMonth(m);
+    setYear(y);
+    fetchData(y, m);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const handleDateSubmit = useCallback(
+    (e: FormEvent) => {
+      e.preventDefault();
+      if (!isValidDate(year, month)) {
+        setError("Invalid datez.");
+        return;
+      }
+      setSearchParams({ month: month.toString(), year: year.toString() });
+      fetchData(year, month);
+    },
+    [fetchData, month, setSearchParams, year]
+  );
+  const handleClickDelete = useCallback(
+    (tid: string) => {
+      deleteTransaction(tid);
+      const frows = tableRows.filter((r) => r.key !== tid);
+      setTableRows(frows);
+    },
+    [tableRows]
+  );
   return (
-    <main>
-      <Title>Transactions</Title>
-      <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
-        <form style={{ display: "flex" }} onSubmit={handleDateSubmit}>
-          <Form.Item label="Month" layout="vertical">
-            <Select value={month} onChange={(e) => setMonth(e)}>
-              {monthNames.map((m, i) => (
-                <Select.Option key={i} value={i}>
-                  {m}
-                </Select.Option>
+    <div className="transactions-page">
+      {error.length > 0 && <Alert>{error}</Alert>}
+      <Card className="mbe-4">
+        <Card.Header>
+          <Text.H1>Transactions</Text.H1>
+        </Card.Header>
+        <Card.Body className="transactions-controls">
+          <Form className="d-flex gap-4" onSubmit={handleDateSubmit}>
+            <Form.Group controlId="select-month">
+              <Form.Label>Month</Form.Label>
+              <Form.Select
+                value={month}
+                onChange={(e) => setMonth(+e.target.value)}
+              >
+                {monthNames.map((m, i) => (
+                  <option key={i} value={i}>
+                    {m}
+                  </option>
+                ))}
+              </Form.Select>
+            </Form.Group>
+            <Form.Group controlId="select-year">
+              <Form.Label>Year</Form.Label>
+              <Form.Select
+                value={year}
+                onChange={(e) => setYear(+e.target.value)}
+              >
+                {yearChoices.map((y, i) => (
+                  <option key={i} value={y}>
+                    {y}
+                  </option>
+                ))}
+              </Form.Select>
+            </Form.Group>
+            <Form.Group controlId="date-submit">
+              <Form.Label style={{color: '#fff'}}>Submit</Form.Label>
+              <div>
+                <Button type="submit">Submit</Button>
+              </div>
+            </Form.Group>
+          </Form>
+          <Anchor btn href="/transactions/new" className="btn-primary">
+            Add transaction
+          </Anchor>
+        </Card.Body>
+      </Card>
+
+      <aside className="transactions-summary" aria-label="Transactions Summary">
+        <Card>
+          <Card.Header>
+            <Text.H2 className="transactions-summary-title">Expenses</Text.H2>
+          </Card.Header>
+          <Card.Body>
+            {currencies &&
+              totalExpense &&
+              currencies.map((currency, i) => (
+                <Text.P key={i}>
+                  {currency} {totalExpense[currency] || 0}
+                </Text.P>
               ))}
-            </Select>
-          </Form.Item>
-          <Form.Item label="Year" layout="vertical">
-            <Select value={year} onChange={(e) => setYear(e)}>
-              {yearChoices.map((y, i) => (
-                <Select.Option key={i} value={y}>
-                  {y}
-                </Select.Option>
+          </Card.Body>
+        </Card>
+        <Card>
+          <Card.Header>
+            <Text.H2 className="transactions-summary-title">Income</Text.H2>
+          </Card.Header>
+          <Card.Body>
+            {currencies &&
+              totalIncome &&
+              currencies.map((currency, i) => (
+                <Text.P key={i}>
+                  {currency} {totalIncome[currency] || 0}
+                </Text.P>
               ))}
-            </Select>
-          </Form.Item>
-          <Form.Item label="Submit" layout="vertical">
-            <Button htmlType="submit">Submit</Button>
-          </Form.Item>
-        </form>
-        <Button type="primary" href="/transactions/new">
-          Add transaction
-        </Button>
-      </Row>
-      <section
-        aria-label="monthly transaction summary"
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          flexWrap: "wrap",
-        }}
-      >
-        {summary &&
-          typeTitles.map((title, i) => (
-            <Card key={i} style={{ minWidth: "10rem" }}>
-              <Paragraph strong style={{ fontSize: "1rem" }}>
-                {title}
-              </Paragraph>
-              {Object.keys(summary[titleToSlugMap[title]]).map(
-                (abbr, j) => (
-                  <Paragraph key={j}>
-                    {abbr} {summary[titleToSlugMap[title]][abbr]}
-                  </Paragraph>
-                )
-              )}
-            </Card>
-          ))}
-      </section>
-      <section className="table-menu" aria-label="table actions">
-        <Dropdown.Button
-          menu={{ items: actionItems, onClick: onActionMenuClick }}
-        >
-          Actions
-        </Dropdown.Button>
-      </section>
-      <Table<ITableRow>
-        onRow={(record) => {
-          return {
-            onClick: () => {
-              navigate(`${record.key}`);
-            },
-          };
-        }}
-        rowSelection={rowSelection}
-        columns={columns}
-        dataSource={tableRows}
-      />
-    </main>
+          </Card.Body>
+        </Card>
+        <Card>
+          <Card.Header>
+            <Text.H2 className="transactions-summary-title">Balance</Text.H2>
+          </Card.Header>
+          <Card.Body>
+            {currencies &&
+              totalBalance &&
+              currencies.map((currency, i) => (
+                <Text.P key={i}>
+                  {currency} {totalBalance[currency] || 0}
+                </Text.P>
+              ))}
+          </Card.Body>
+        </Card>
+      </aside>
+
+      <Card>
+        <Card.Body className="overflow-auto">
+          <Table>
+            <Table.Head>
+              <Table.Row>
+                <Table.Header>Date</Table.Header>
+                <Table.Header>Description</Table.Header>
+                <Table.Header>Amount</Table.Header>
+                <Table.Header>Category</Table.Header>
+                <Table.Header>Type</Table.Header>
+                <Table.Header>Currency</Table.Header>
+              </Table.Row>
+            </Table.Head>
+            <Table.Body>
+              {tableRows &&
+                tableRows.map((r) => (
+                  <Table.Row key={r.key}>
+                    <Table.Cell>{r.date}</Table.Cell>
+                    <Table.Cell>{r.description}</Table.Cell>
+                    <Table.Cell>{r.amount}</Table.Cell>
+                    <Table.Cell>{r.category}</Table.Cell>
+                    <Table.Cell>{r.type}</Table.Cell>
+                    <Table.Cell>{r.currency}</Table.Cell>
+                    <Table.Cell>
+                      <Anchor btn href={`/transactions/${r.key}`}>
+                        Edit
+                      </Anchor>
+                    </Table.Cell>
+                    <Table.Cell>
+                      <Button onClick={() => handleClickDelete(r.key)}>
+                        Delete
+                      </Button>
+                    </Table.Cell>
+                  </Table.Row>
+                ))}
+            </Table.Body>
+          </Table>
+        </Card.Body>
+      </Card>
+    </div>
   );
 }

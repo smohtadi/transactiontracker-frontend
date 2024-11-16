@@ -1,10 +1,6 @@
+import { httpGet } from "../http/http";
 import { ITransactionType } from "../types";
 
 export function getAll(): Promise<ITransactionType[]> {
-  return new Promise((resolve) => {
-    resolve([
-      { id: 1, name: "Expense" },
-      { id: 2, name: "Income" },
-    ]);
-  });
+  return httpGet<ITransactionType[]>("/transaction-types/");
 }

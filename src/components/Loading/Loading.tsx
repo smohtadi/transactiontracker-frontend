@@ -1,11 +1,5 @@
-import { Spin, Typography } from "antd";
-const { Text } = Typography;
+import { Text } from "../../components";
 
 export default function Loading() {
-  return (
-    <>
-      <Spin />
-      <Text>Loading...</Text>
-    </>
-  );
+  return <Text.Span role="status">Loading</Text.Span>;
 }
